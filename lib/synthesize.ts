@@ -8,8 +8,14 @@ import type {
   RadarScores,
   Report,
   ScrapeSignals,
+  SignalState,
 } from './types';
 import { BUDGET_LABELS, GOAL_LABELS, MEASUREMENT_LABELS } from './types';
+
+/** True only when we positively detected the signal — `unknown` never counts as present. */
+const on = (s: SignalState) => s === 'confirmed';
+/** True only when we successfully checked and it was genuinely absent. */
+const off = (s: SignalState) => s === 'not_detected';
 
 /**
  * Heuristic synthesis — always runs. If ANTHROPIC_API_KEY is set we additionally
@@ -59,16 +65,17 @@ export async function synthesize(args: {
 }
 
 function computeRadar(s: ScrapeSignals, a: AdSignals, m: Measurement | ''): RadarScores {
-  // 0–10 per axis
+  // 0–10 per axis. Only `confirmed` signals earn points; `unknown` never inflates a
+  // score (and never silently penalises as if absent — that nuance lives in the findings).
   const tracking =
-    (s.hasGTM ? 2 : 0) +
-    (s.hasGA4 ? 2.5 : 0) +
-    (s.hasMetaPixel ? 2 : 0) +
-    (s.hasLinkedInInsight ? 1.5 : 0) +
-    (s.hasHotjar || s.hasClarity ? 2 : 0);
+    (on(s.gtm) ? 2 : 0) +
+    (on(s.ga4) ? 2.5 : 0) +
+    (on(s.metaPixel) ? 2 : 0) +
+    (on(s.linkedInInsight) ? 1.5 : 0) +
+    (on(s.hotjar) || on(s.clarity) ? 2 : 0);
 
   const paidAcquisition =
-    (a.googleAdsActive ? 5 : 0) + (a.metaAdsActive ? 4 : 0) + Math.min(1, a.googleAdsCount * 0.1);
+    (on(a.google) ? 5 : 0) + (on(a.meta) ? 4 : 0) + Math.min(1, a.googleAdsCount * 0.1);
 
   const organicPresence =
     (s.hasBlog ? 3 : 0) +
@@ -80,10 +87,10 @@ function computeRadar(s: ScrapeSignals, a: AdSignals, m: Measurement | ''): Rada
     (s.hasContactForm ? 3 : 0) + (s.hasLeadMagnet ? 4 : 0) + Math.min(3, s.ctas.length * 0.6);
 
   const retention =
-    (s.hasMetaPixel ? 3 : 0) +
-    (s.hasLinkedInInsight ? 2 : 0) +
-    (s.hasGA4 ? 2 : 0) +
-    (s.hasCookieBanner ? 1 : 0) +
+    (on(s.metaPixel) ? 3 : 0) +
+    (on(s.linkedInInsight) ? 2 : 0) +
+    (on(s.ga4) ? 2 : 0) +
+    (on(s.cookieBanner) ? 1 : 0) +
     (s.hasBlog ? 2 : 0);
 
   const measurementMap: Record<Measurement, number> = {
@@ -124,16 +131,14 @@ function inferBusiness(s: ScrapeSignals) {
 
 function findStrengths(s: ScrapeSignals, a: AdSignals): Finding[] {
   const f: Finding[] = [];
-  if (s.hasGA4 && s.hasGTM)
+  if (on(s.ga4) && on(s.gtm))
     f.push({
       severity: 'info',
       title: 'Tracking foundation OK',
       detail: 'Macie GA4 + GTM — dobre fundamenty do dalszej rozbudowy pomiaru.',
     });
-  if (a.googleAdsActive) {
-    const meta = (a as any).googleAdsMeta as
-      | { formats?: Record<string, number>; first?: string; last?: string }
-      | undefined;
+  if (on(a.google)) {
+    const meta = a.googleAdsMeta;
     const formatStr = meta?.formats
       ? Object.entries(meta.formats)
           .map(([k, v]) => `${v} ${k.toLowerCase()}`)
@@ -174,7 +179,20 @@ function findStrengths(s: ScrapeSignals, a: AdSignals): Finding[] {
 
 function findGaps(s: ScrapeSignals, a: AdSignals, form: LeadForm): Finding[] {
   const gaps: Finding[] = [];
-  if (!s.hasMetaPixel)
+
+  // If the site itself was unreachable, every signal is `unknown`. Be honest about
+  // it instead of reporting a wall of fake "Brak ..." findings.
+  if (!s.reachable) {
+    gaps.push({
+      severity: 'warning',
+      title: 'Nie udało się zeskanować strony',
+      detail: `Nie mogliśmy pobrać ${s.domain} (${s.fetchError || 'błąd połączenia'}), więc trackingu nie da się automatycznie zweryfikować. Sprawdzimy go ręcznie na konsultacji.`,
+    });
+    return gaps;
+  }
+
+  // --- Genuine gaps: only when we successfully looked and the signal was absent. ---
+  if (off(s.metaPixel))
     gaps.push({
       severity: 'critical',
       title: 'Brak Meta Pixel',
@@ -182,34 +200,36 @@ function findGaps(s: ScrapeSignals, a: AdSignals, form: LeadForm): Finding[] {
       impact:
         'Przy typowym ruchu 5–10 tys. UU/mc to ~30–60 tys. retargetowalnych użytkowników rocznie nieodzyskanych.',
     });
-  if (!s.hasGA4)
+  if (off(s.ga4))
     gaps.push({
       severity: 'critical',
       title: 'Brak GA4',
       detail: 'Universal Analytics nie istnieje od 2023. Bez GA4 nie macie podstawowego pomiaru ruchu i konwersji.',
       impact: 'Każda decyzja kampanijna jest „na wyczucie" — typowy koszt to 20–40% nieoptymalnego budżetu.',
     });
-  if (!s.hasGTM)
+  if (off(s.gtm))
     gaps.push({
       severity: 'warning',
       title: 'Brak Google Tag Managera',
       detail: 'Bez GTM każda zmiana tracking-u wymaga developera — to spowalnia testy i blokuje pomiar konwersji.',
     });
-  if (!s.hasLinkedInInsight && form.measurement && (form.goal === 'lead_gen' || form.goal === 'new_market'))
+  if (off(s.linkedInInsight) && form.measurement && (form.goal === 'lead_gen' || form.goal === 'new_market'))
     gaps.push({
       severity: 'warning',
       title: 'Brak LinkedIn Insight Tag',
       detail:
         'Dla B2B / lead gen LinkedIn jest najdroższym, ale najbardziej precyzyjnym kanałem. Bez Insight Tag nie zoptymalizujecie kampanii.',
     });
-  if (!s.hasHotjar && !s.hasClarity)
+  if (off(s.hotjar) && off(s.clarity))
     gaps.push({
       severity: 'warning',
       title: 'Brak narzędzia do behavioral analytics',
       detail:
         'Hotjar / Clarity to darmowy fundament do rozumienia UX. Bez nich nie wiecie, dlaczego użytkownik nie konwertuje.',
     });
-  if (!a.metaAdsActive && (form.goal === 'sales_growth' || form.goal === 'brand_awareness'))
+  // Meta ads are only flagged when Transparency actually confirmed none — we never
+  // check Meta Ad Library yet, so `unknown` produces no claim.
+  if (off(a.meta) && (form.goal === 'sales_growth' || form.goal === 'brand_awareness'))
     gaps.push({
       severity: 'warning',
       title: 'Brak aktywnych kampanii Meta',
@@ -229,6 +249,20 @@ function findGaps(s: ScrapeSignals, a: AdSignals, form: LeadForm): Finding[] {
       title: 'Brak bloga / content hubu',
       detail: 'Cel świadomościowy bez contentu = drogi zasięg paid bez efektu długoterminowego.',
     });
+
+  // --- Honest "couldn't verify" notes for signals hidden behind an unreadable GTM container. ---
+  const unverified: string[] = [];
+  if (s.ga4 === 'unknown') unverified.push('GA4');
+  if (s.metaPixel === 'unknown') unverified.push('Meta Pixel');
+  if (s.linkedInInsight === 'unknown') unverified.push('LinkedIn Insight');
+  if (unverified.length)
+    gaps.push({
+      severity: 'info',
+      title: `Tracking do potwierdzenia: ${unverified.join(', ')}`,
+      detail:
+        'Strona ładuje GTM, ale nie udało nam się odczytać zawartości kontenera, więc tych tagów nie potwierdzamy automatycznie. Zweryfikujemy je ręcznie — nie zakładamy, że ich brakuje.',
+    });
+
   return gaps.slice(0, 5);
 }
 
@@ -282,7 +316,7 @@ function buildRecommendation(
   if (goal === 'lead_gen' && !s.hasLeadMagnet) {
     plan.push('Lead magnet w 4 tygodnie: jeden raport/kalkulator branżowy + landing + sekwencja 5 maili.');
   }
-  if (goal === 'sales_growth' && !s.hasMetaPixel) {
+  if (goal === 'sales_growth' && off(s.metaPixel)) {
     plan.push('Włączenie Meta Pixel + CAPI: odzyskanie remarketingu (zwykle +15–25% ROAS w 60 dni).');
   }
   if (goal === 'brand_awareness') {

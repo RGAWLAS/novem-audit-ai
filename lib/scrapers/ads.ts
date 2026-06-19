@@ -3,14 +3,17 @@ import type { AdSignals } from '../types';
 /**
  * Google Ads Transparency via Apify actor `automation-lab/google-ads-scraper`.
  * Uses Google's internal SearchService RPC — fast (~10-20s) and cheap.
- * Falls back to a placeholder when APIFY_TOKEN is missing or call fails.
+ *
+ * When the integration is not configured or the call fails we return an honest
+ * `unknown` state — we never fabricate ad counts (the old placeholder did, which
+ * made "no campaigns" indistinguishable from "we couldn't check").
  */
 const ACTOR = 'automation-lab~google-ads-scraper';
 
 export async function scrapeAds(domain: string): Promise<AdSignals> {
   const token = process.env.APIFY_TOKEN;
   if (!token || token.startsWith('PASTE_')) {
-    return placeholder(domain);
+    return unknownAds();
   }
 
   try {
@@ -28,13 +31,13 @@ export async function scrapeAds(domain: string): Promise<AdSignals> {
     });
     if (!res.ok) {
       console.warn('[ads] Apify HTTP', res.status, await res.text().catch(() => ''));
-      return placeholder(domain);
+      return unknownAds();
     }
     const items: ApifyAd[] = await res.json();
     return shape(items);
   } catch (e) {
     console.warn('[ads] Apify error', e);
-    return placeholder(domain);
+    return unknownAds();
   }
 }
 
@@ -73,22 +76,23 @@ function shape(items: ApifyAd[]): AdSignals {
   }));
 
   return {
-    googleAdsActive: total > 0,
+    // We successfully queried Transparency: confirmed if any ad, otherwise a
+    // trustworthy not_detected.
+    google: total > 0 ? 'confirmed' : 'not_detected',
     googleAdsCount: total,
-    metaAdsActive: false, // separate Meta Ad Library integration is TODO
+    meta: 'unknown', // separate Meta Ad Library integration is TODO — never claimed as "none"
     metaAdsCount: 0,
     sampleAds,
     googleAdsMeta: { formats, first, last },
-  } as AdSignals & { googleAdsMeta: { formats: Record<string, number>; first?: string; last?: string } };
+  };
 }
 
-function placeholder(domain: string): AdSignals {
-  const seed = domain.length;
+function unknownAds(): AdSignals {
   return {
-    googleAdsActive: seed % 2 === 0,
-    googleAdsCount: seed % 7,
-    metaAdsActive: seed % 3 === 0,
-    metaAdsCount: seed % 5,
+    google: 'unknown',
+    googleAdsCount: 0,
+    meta: 'unknown',
+    metaAdsCount: 0,
     sampleAds: [],
   };
 }

@@ -1,8 +1,8 @@
 'use client';
 import { motion, useInView } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
-import type { Report as ReportType, Finding } from '@/lib/types';
-import { GOAL_LABELS, BUDGET_LABELS, MEASUREMENT_LABELS } from '@/lib/types';
+import type { Report as ReportType, Finding, ScrapeSignals, SignalState } from '@/lib/types';
+import { GOAL_LABELS, BUDGET_LABELS, MEASUREMENT_LABELS, SIGNAL_LABELS } from '@/lib/types';
 import { RadarChart } from './RadarChart';
 import { PixelGlobe, PixelPadlock, PixelDial, PixelNLogo } from './PixelArt';
 
@@ -116,11 +116,12 @@ novem · pieczęć zaufania
 
 function SectionAds({ report }: { report: ReportType }) {
   const ads = report.ads;
-  const meta = (ads as any).googleAdsMeta as
-    | { formats?: Record<string, number>; first?: string; last?: string }
-    | undefined;
+  const meta = ads.googleAdsMeta;
 
-  if (!ads.googleAdsActive && !ads.metaAdsActive) {
+  // We never checked Meta Ad Library yet (always `unknown`), so the only positive
+  // evidence comes from Google Transparency.
+  if (ads.google !== 'confirmed') {
+    const checked = ads.google === 'not_detected';
     return (
       <SectionWrapper>
         <SectionHeader num="02" title="WASZE REKLAMY" subtitle="co_znalezlismy" />
@@ -128,13 +129,31 @@ function SectionAds({ report }: { report: ReportType }) {
           initial={fadeUp.hidden}
           whileInView={fadeUp.visible}
           viewport={{ once: true, margin: '-100px' }}
-          className="glass-soft p-8 bg-gradient-to-br from-novem-warn/15 via-white to-novem-peach/15"
+          className={`glass-soft p-8 bg-gradient-to-br ${
+            checked ? 'from-novem-warn/15' : 'from-novem-violetGlow/15'
+          } via-white to-novem-peach/15`}
         >
-          <div className="font-mono text-[10px] uppercase tracking-widest text-novem-warn mb-2 font-bold">// warning</div>
-          <div className="display-mono text-2xl text-novem-ink mb-2">BRAK AKTYWNYCH KAMPANII</div>
+          <div className={`font-mono text-[10px] uppercase tracking-widest mb-2 font-bold ${checked ? 'text-novem-warn' : 'text-novem-dim'}`}>
+            {checked ? '// warning' : '// nie_zweryfikowano'}
+          </div>
+          <div className="display-mono text-2xl text-novem-ink mb-2">
+            {checked ? 'BRAK AKTYWNYCH KAMPANII GOOGLE' : 'REKLAM NIE ZWERYFIKOWANO'}
+          </div>
           <div className="text-sm text-novem-dim leading-relaxed">
-            Nie widzimy aktywnych reklam dla <span className="text-novem-ink font-bold">{report.scrape.domain}</span>
-            {' '}ani w Google Ads Transparency, ani w Meta Ad Library.
+            {checked ? (
+              <>
+                Google Ads Transparency nie pokazuje aktywnych reklam dla{' '}
+                <span className="text-novem-ink font-bold">{report.scrape.domain}</span>. Meta Ad Library
+                sprawdzamy ręcznie na konsultacji.
+              </>
+            ) : (
+              <>
+                Nie udało nam się automatycznie sprawdzić reklam dla{' '}
+                <span className="text-novem-ink font-bold">{report.scrape.domain}</span> (integracja
+                niepodłączona lub limit zapytań). To <span className="text-novem-ink font-bold">nie</span> oznacza,
+                że kampanii nie ma — zweryfikujemy je ręcznie.
+              </>
+            )}
           </div>
         </motion.div>
       </SectionWrapper>
@@ -154,7 +173,15 @@ function SectionAds({ report }: { report: ReportType }) {
           className="lg:col-span-7 grid grid-cols-2 gap-3"
         >
           <BigStat label="google ads" value={ads.googleAdsCount} accent />
-          <BigStat label="meta ads" value={ads.metaAdsCount} />
+          {ads.meta === 'confirmed' ? (
+            <BigStat label="meta ads" value={ads.metaAdsCount} />
+          ) : (
+            <div className="p-5 rounded-card glass-soft flex flex-col justify-center">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-novem-dim mb-2">// meta ads</div>
+              <div className="display-mono text-2xl leading-tight text-novem-dim">n/d</div>
+              <div className="font-mono text-[10px] uppercase tracking-widest text-novem-dim mt-2">nie zweryfikowano</div>
+            </div>
+          )}
           {meta?.first && meta?.last && (
             <div className="col-span-2 glass-soft p-5">
               <div className="font-mono text-[10px] uppercase tracking-widest text-novem-dim mb-2"># okres_aktywnosci</div>
@@ -284,6 +311,22 @@ function SectionAudit({ report }: { report: ReportType }) {
     <SectionWrapper>
       <SectionHeader num="03" title="AUDYT DOJRZAŁOŚCI" subtitle="radar_6_wymiarow" />
 
+      {!report.scrape.reachable && (
+        <motion.div
+          initial={fadeUp.hidden}
+          whileInView={fadeUp.visible}
+          viewport={{ once: true }}
+          className="glass-soft p-5 mb-6 bg-gradient-to-br from-novem-warn/15 via-white to-novem-peach/10"
+        >
+          <div className="font-mono text-[10px] uppercase tracking-widest text-novem-warn mb-1.5 font-bold">// uwaga</div>
+          <div className="text-sm text-novem-ink leading-relaxed">
+            Nie udało nam się pobrać <span className="font-bold">{report.scrape.domain}</span>
+            {report.scrape.fetchError ? ` (${report.scrape.fetchError})` : ''} — sygnały trackingu są
+            oznaczone jako <span className="font-bold">nie zweryfikowano</span>, a nie „brak”. Sprawdzimy je ręcznie.
+          </div>
+        </motion.div>
+      )}
+
       {/* Radar + dial */}
       <div className="grid lg:grid-cols-12 gap-4 mb-6">
         <motion.div
@@ -323,6 +366,8 @@ function SectionAudit({ report }: { report: ReportType }) {
         <ScoreCell label="retencja" value={report.radar.retention} />
         <ScoreCell label="pomiar" value={report.radar.measurement} />
       </motion.div>
+
+      <TrackingSignals scrape={report.scrape} />
 
       <div className="grid md:grid-cols-2 gap-6">
         <div>
@@ -530,6 +575,64 @@ function SectionHeader({ num, title, subtitle }: { num: string; title: string; s
       <div>
         <div className="font-mono text-[10px] uppercase tracking-widest text-novem-dim mb-1">// {subtitle}</div>
         <h2 className="display-mono text-2xl lg:text-3xl text-novem-ink leading-none">{title}</h2>
+      </div>
+    </div>
+  );
+}
+
+function SignalBadge({ state }: { state: SignalState }) {
+  const map: Record<SignalState, { cls: string; glyph: string }> = {
+    confirmed: { cls: 'bg-novem-ok text-white', glyph: '✓' },
+    not_detected: { cls: 'bg-novem-err/90 text-white', glyph: '✗' },
+    unknown: { cls: 'bg-white text-novem-dim border border-novem-ink/15', glyph: '?' },
+  };
+  const { cls, glyph } = map[state];
+  return (
+    <span className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded-full font-bold inline-flex items-center gap-1 ${cls}`}>
+      <span>{glyph}</span>
+      <span>{SIGNAL_LABELS[state]}</span>
+    </span>
+  );
+}
+
+function TrackingSignals({ scrape }: { scrape: ScrapeSignals }) {
+  const rows: { label: string; state: SignalState }[] = [
+    { label: 'gtm', state: scrape.gtm },
+    { label: 'ga4', state: scrape.ga4 },
+    { label: 'meta pixel', state: scrape.metaPixel },
+    { label: 'linkedin insight', state: scrape.linkedInInsight },
+    { label: 'hotjar', state: scrape.hotjar },
+    { label: 'clarity', state: scrape.clarity },
+    { label: 'cookie consent', state: scrape.cookieBanner },
+  ];
+  return (
+    <div className="glass-soft p-5 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div className="font-mono text-[10px] uppercase tracking-widest text-novem-ink font-bold"># sygnaly_trackingu</div>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-novem-dim">
+          {scrape.gtmContainerChecked ? 'gtm_container ✓' : 'gtm_container —'}
+        </span>
+      </div>
+      <motion.div
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: true }}
+        variants={{ visible: { transition: { staggerChildren: 0.04 } } }}
+        className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2"
+      >
+        {rows.map((r) => (
+          <motion.div
+            key={r.label}
+            variants={fadeUp}
+            className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-white border border-novem-ink/5"
+          >
+            <span className="font-mono text-[11px] text-novem-ink truncate">{r.label}</span>
+            <SignalBadge state={r.state} />
+          </motion.div>
+        ))}
+      </motion.div>
+      <div className="font-mono text-[10px] text-novem-dim mt-3 leading-relaxed">
+        // „nie zweryfikowano" ≠ „brak" — oznacza tag, którego nie odczytaliśmy (np. ukryty w kontenerze GTM).
       </div>
     </div>
   );

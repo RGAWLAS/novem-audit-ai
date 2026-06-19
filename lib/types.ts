@@ -45,20 +45,40 @@ export interface LeadForm {
   consent: boolean;
 }
 
+/**
+ * Tri-state signal. We never collapse "we couldn't check" into "absent":
+ *  - confirmed     → we positively detected it
+ *  - not_detected  → we successfully looked and it was not there
+ *  - unknown       → we could not verify (page unreachable, GTM container unreadable, …)
+ */
+export type SignalState = 'confirmed' | 'not_detected' | 'unknown';
+
+export const SIGNAL_LABELS: Record<SignalState, string> = {
+  confirmed: 'wykryto',
+  not_detected: 'brak',
+  unknown: 'nie zweryfikowano',
+};
+
 export interface ScrapeSignals {
   url: string;
   domain: string;
+  /** Did we get a usable (2xx) HTML response? When false every signal below is `unknown`. */
+  reachable: boolean;
+  /** Reason the site could not be scanned (HTTP status / network error). */
+  fetchError?: string;
+  /** Whether a GTM container was found and successfully parsed (Droga 1). */
+  gtmContainerChecked: boolean;
   title?: string;
   h1?: string;
   metaDescription?: string;
   language?: string;
-  hasGTM: boolean;
-  hasGA4: boolean;
-  hasMetaPixel: boolean;
-  hasLinkedInInsight: boolean;
-  hasHotjar: boolean;
-  hasClarity: boolean;
-  hasCookieBanner: boolean;
+  gtm: SignalState;
+  ga4: SignalState;
+  metaPixel: SignalState;
+  linkedInInsight: SignalState;
+  hotjar: SignalState;
+  clarity: SignalState;
+  cookieBanner: SignalState;
   socialLinks: string[];
   ctas: string[];
   hasBlog: boolean;
@@ -68,11 +88,14 @@ export interface ScrapeSignals {
 }
 
 export interface AdSignals {
-  googleAdsActive: boolean;
+  /** confirmed = active ads found · not_detected = checked, none · unknown = could not check. */
+  google: SignalState;
   googleAdsCount: number;
-  metaAdsActive: boolean;
+  /** Meta Ad Library integration not wired yet → always `unknown` (never faked as "none"). */
+  meta: SignalState;
   metaAdsCount: number;
   sampleAds: { platform: string; text?: string; image?: string }[];
+  googleAdsMeta?: { formats: Record<string, number>; first?: string; last?: string };
 }
 
 export interface RadarScores {
