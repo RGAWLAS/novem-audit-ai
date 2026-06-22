@@ -198,14 +198,14 @@ function findGaps(s: ScrapeSignals, a: AdSignals, form: LeadForm): Finding[] {
       title: 'Brak Meta Pixel',
       detail: 'Bez Pixela tracicie możliwość retargetingu w Meta i pomiaru konwersji Meta Ads.',
       impact:
-        'Przy typowym ruchu 5–10 tys. UU/mc to ~30–60 tys. retargetowalnych użytkowników rocznie nieodzyskanych.',
+        'Każdy miesiąc bez Pixela to bezpowrotnie utracona pula użytkowników do remarketingu w Meta — tej grupy nie da się odbudować wstecz.',
     });
   if (off(s.ga4))
     gaps.push({
       severity: 'critical',
       title: 'Brak GA4',
       detail: 'Universal Analytics nie istnieje od 2023. Bez GA4 nie macie podstawowego pomiaru ruchu i konwersji.',
-      impact: 'Każda decyzja kampanijna jest „na wyczucie" — typowy koszt to 20–40% nieoptymalnego budżetu.',
+      impact: 'Budżet mediowy wydajecie bez danych o tym, które kanały realnie konwertują — optymalizacja opiera się na domysłach.',
     });
   if (off(s.gtm))
     gaps.push({
