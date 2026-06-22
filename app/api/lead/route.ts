@@ -8,6 +8,9 @@ import type { LeadForm } from '@/lib/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Run the scrape inside the live invocation (serverless freezes work that runs
+// after the response is returned). Netlify kills functions at ~10s by default.
+export const maxDuration = 60;
 
 function valid(f: any): f is LeadForm {
   return (
@@ -27,19 +30,21 @@ export async function POST(req: NextRequest) {
     steps: DEFAULT_STEPS.map((s) => ({ ...s })),
   });
 
-  // Fire-and-forget pipeline. In production swap to a queue (Inngest, Trigger.dev, QStash).
-  // [DIAG] tymczasowe — usunąć po diagnozie. Porównaj te znaczniki czasu w logach Netlify:
-  // jeśli "POST returning" pada PRZED "pipeline START", a fetch kończy się abortem ~8s
-  // później (albo wcale), to potwierdza zamrożenie tła w środowisku serverless.
-  console.log(`[lead:POST] id=${id} url=${body.url} → spawning pipeline at=${new Date().toISOString()}`);
-  void runPipeline(id, body).catch((e) => {
+  // Run the pipeline to completion before responding. Fire-and-forget does not
+  // survive on serverless — work after the response is suspended. The client polls
+  // GET ?id= for the result, so an error is surfaced via the stored status.
+  // [DIAG] tymczasowe — usunąć po diagnozie.
+  console.log(`[lead:POST] id=${id} url=${body.url} → running pipeline at=${new Date().toISOString()}`);
+  try {
+    await runPipeline(id, body);
+  } catch (e) {
     const p = store.get(id);
     if (p) {
       p.status = 'error';
-      p.error = String(e?.message || e);
+      p.error = String((e as Error)?.message || e);
       store.set(id, p);
     }
-  });
+  }
 
   // [DIAG]
   console.log(`[lead:POST] id=${id} → returning response at=${new Date().toISOString()}`);
