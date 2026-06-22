@@ -13,18 +13,40 @@ type FetchResult =
 async function fetchText(url: string, timeoutMs: number, accept: string): Promise<FetchResult> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const startedAt = Date.now();
+  // [DIAG] tymczasowe logowanie — usunąć po diagnozie
+  console.log(`[scrape:fetch] → start url=${url} timeoutMs=${timeoutMs} ua="${UA}" at=${new Date().toISOString()}`);
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': UA, Accept: accept },
       signal: ctrl.signal,
       redirect: 'follow',
     });
+    const elapsed = Date.now() - startedAt;
+    // [DIAG]
+    console.log(
+      `[scrape:fetch] ← response url=${url} status=${res.status} ok=${res.ok} type="${res.headers.get('content-type') || ''}" elapsedMs=${elapsed}`,
+    );
     // Honest fetch: a 4xx/5xx body is an error page, not the site. Never parse it.
     if (!res.ok) {
+      // [DIAG] podejrzyj treść strony błędu (np. blokada Cloudflare / captcha) — nie zmienia wyniku
+      const snippet = await res.text().catch(() => '');
+      console.warn(
+        `[scrape:fetch] !ok url=${url} status=${res.status} bodySnippet="${snippet.slice(0, 200).replace(/\s+/g, ' ')}"`,
+      );
       return { ok: false, error: `HTTP ${res.status}` };
     }
     return { ok: true, body: await res.text() };
   } catch (e) {
+    const elapsed = Date.now() - startedAt;
+    const err = e as any;
+    // [DIAG] kluczowe: undici opakowuje prawdziwy powód w `cause` (ENOTFOUND, ECONNREFUSED,
+    // ENETUNREACH, UND_ERR_CONNECT_TIMEOUT...). Obecny kod gubi to, zwracając samo "fetch failed".
+    console.error(
+      `[scrape:fetch] ✗ url=${url} elapsedMs=${elapsed} name=${err?.name} message=${err?.message} cause=${
+        err?.cause ? err.cause.code || err.cause.message || String(err.cause) : 'none'
+      } aborted=${ctrl.signal.aborted}`,
+    );
     const reason = e instanceof Error && e.name === 'AbortError' ? 'timeout' : String((e as Error)?.message || e);
     return { ok: false, error: reason };
   } finally {
@@ -93,8 +115,13 @@ export async function scrapeSite(rawUrl: string): Promise<ScrapeSignals> {
   const url = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
   const domain = new URL(url).hostname.replace(/^www\./, '');
 
+  // [DIAG] tymczasowe — usunąć po diagnozie
+  console.log(`[scrape:site] → scrapeSite url=${url} domain=${domain} at=${new Date().toISOString()}`);
+
   const page = await fetchText(url, TIMEOUT_MS, 'text/html,application/xhtml+xml');
   if (!page.ok) {
+    // [DIAG]
+    console.warn(`[scrape:site] ✗ unreachable url=${url} reason="${page.error}"`);
     // We genuinely could not see the site → everything is `unknown`, nothing is fabricated.
     return unknownSignals(url, domain, page.error);
   }

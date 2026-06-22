@@ -28,6 +28,10 @@ export async function POST(req: NextRequest) {
   });
 
   // Fire-and-forget pipeline. In production swap to a queue (Inngest, Trigger.dev, QStash).
+  // [DIAG] tymczasowe — usunąć po diagnozie. Porównaj te znaczniki czasu w logach Netlify:
+  // jeśli "POST returning" pada PRZED "pipeline START", a fetch kończy się abortem ~8s
+  // później (albo wcale), to potwierdza zamrożenie tła w środowisku serverless.
+  console.log(`[lead:POST] id=${id} url=${body.url} → spawning pipeline at=${new Date().toISOString()}`);
   void runPipeline(id, body).catch((e) => {
     const p = store.get(id);
     if (p) {
@@ -37,10 +41,14 @@ export async function POST(req: NextRequest) {
     }
   });
 
+  // [DIAG]
+  console.log(`[lead:POST] id=${id} → returning response at=${new Date().toISOString()}`);
   return NextResponse.json({ id });
 }
 
 async function runPipeline(id: string, form: LeadForm) {
+  // [DIAG] tymczasowe — usunąć po diagnozie
+  console.log(`[lead:pipeline] id=${id} START at=${new Date().toISOString()}`);
   const markDone = (key: string) => {
     const p = store.get(id);
     if (!p) return;
