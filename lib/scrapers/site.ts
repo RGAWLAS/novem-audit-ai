@@ -69,10 +69,36 @@ function resolveSignal(
   inline: boolean,
   inContainer: boolean,
   gtm: 'none' | 'parsed' | 'opaque',
+  jsRendered: boolean,
 ): SignalState {
   if (inline || inContainer) return 'confirmed';
   if (gtm === 'opaque') return 'unknown';
+  // A JS-rendered SPA/SSG injects its tags client-side, so their absence from the
+  // *served* HTML proves nothing — we never executed the JS. Stay honest with
+  // `unknown` ("nie zweryfikowano") instead of falsely claiming "Brak X".
+  if (jsRendered) return 'unknown';
   return 'not_detected';
+}
+
+/**
+ * Detect pages whose tracking is injected by client-side JS (SPA/SSG). For these,
+ * cheerio sees the pre-hydration HTML, so a missing tag is "couldn't verify", not
+ * "absent". Covers Next.js, Nuxt, Gatsby, Angular, Vue SSR, SvelteKit and Remix.
+ */
+function isJsRendered(html: string): boolean {
+  const l = html.toLowerCase();
+  return (
+    l.includes('_next/static') ||
+    l.includes('__next_data__') ||
+    l.includes('"__n_ssg"') ||
+    l.includes('"__n_ssp"') ||
+    l.includes('__nuxt__') ||
+    l.includes('id="__gatsby"') ||
+    l.includes('data-server-rendered') ||
+    l.includes('ng-version=') ||
+    l.includes('data-sveltekit') ||
+    l.includes('window.__remix')
+  );
 }
 
 interface ContainerHits {
@@ -87,13 +113,27 @@ interface ContainerHits {
 function scanForTracking(text: string): ContainerHits {
   const l = text.toLowerCase();
   const has = (n: string) => l.includes(n);
+  // GA4 measurement IDs are `G-` followed by uppercase alphanumerics. Match
+  // case-sensitively and word-bounded against the ORIGINAL text, and only trust a
+  // bare ID when a Google-tag context is actually present. The old loose
+  // `/g-[a-z0-9]{6,}/i` matched CSS like `padding-bottom` ("g-bottom") and produced
+  // false GA4 positives on pages that have no analytics at all.
+  const hasGtagContext = has('gtag') || has('googletagmanager');
+  const ga4Id = /\bG-[A-Z0-9]{8,12}\b/.test(text);
   return {
-    ga4: has('gtag(') || has('googletagmanager.com/gtag') || /g-[a-z0-9]{6,}/i.test(text) ||
+    ga4:
+      has('gtag(') ||
+      has('googletagmanager.com/gtag') ||
+      (hasGtagContext && ga4Id) ||
       // GA4 tag template aliases inside a GTM container
-      has('"gaawc"') || has('"gaawe"') || has('googtag'),
-    metaPixel: has('connect.facebook.net') || has('fbq(') || has('facebook-pixel') || /fbevents\.js/.test(l),
+      has('"gaawc"') ||
+      has('"gaawe"') ||
+      has('googtag'),
+    metaPixel: has('connect.facebook.net') || has('fbq(') || has('facebook-pixel') || has('fbevents.js'),
     linkedInInsight: has('snap.licdn.com') || has('_linkedin_partner_id'),
-    hotjar: has('static.hotjar.com') || has('hotjar'),
+    // Require the loader host or the runtime global — a bare "hotjar" substring also
+    // matches privacy-policy prose ("używamy Hotjar"), which is not an install.
+    hotjar: has('static.hotjar.com') || has('hotjar.com') || has('_hjsettings'),
     clarity: has('clarity.ms'),
     cookieBanner:
       has('cookiebot') || has('cookie-consent') || has('cookielaw') || has('cookieyes') || has('didomi'),
@@ -131,8 +171,14 @@ export async function scrapeSite(rawUrl: string): Promise<ScrapeSignals> {
   const lowerHtml = html.toLowerCase();
   const has = (needle: string) => lowerHtml.includes(needle.toLowerCase());
 
+  // Does this page render its tags client-side? If so, a "missing" tag is
+  // unverifiable rather than absent (see resolveSignal / isJsRendered).
+  const jsRendered = isJsRendered(html);
+
   // --- GTM detection (inline) + container fetch (Droga 1) ---
-  const gtmIdMatch = html.match(/GTM-[A-Z0-9]+/i);
+  // Real GTM IDs are uppercase and word-bounded; matching case-insensitively also
+  // hit lowercase CSS classes like `gtm-trigger` and produced bogus container IDs.
+  const gtmIdMatch = html.match(/\bGTM-[A-Z0-9]{4,}\b/);
   const hasGtmInline = has('googletagmanager.com/gtm.js') || !!gtmIdMatch;
 
   let gtmMode: 'none' | 'parsed' | 'opaque' = 'none';
@@ -146,7 +192,7 @@ export async function scrapeSite(rawUrl: string): Promise<ScrapeSignals> {
   // --- inline detections from the page HTML ---
   const inline = scanForTracking(html);
 
-  const gtm: SignalState = hasGtmInline ? 'confirmed' : 'not_detected';
+  const gtm: SignalState = hasGtmInline ? 'confirmed' : jsRendered ? 'unknown' : 'not_detected';
 
   const socialLinks: string[] = [];
   $('a[href]').each((_, el) => {
@@ -174,12 +220,12 @@ export async function scrapeSite(rawUrl: string): Promise<ScrapeSignals> {
     metaDescription: $('meta[name="description"]').attr('content') || undefined,
     language: $('html').attr('lang') || undefined,
     gtm,
-    ga4: resolveSignal(inline.ga4, c.ga4, gtmMode),
-    metaPixel: resolveSignal(inline.metaPixel, c.metaPixel, gtmMode),
-    linkedInInsight: resolveSignal(inline.linkedInInsight, c.linkedInInsight, gtmMode),
-    hotjar: resolveSignal(inline.hotjar, c.hotjar, gtmMode),
-    clarity: resolveSignal(inline.clarity, c.clarity, gtmMode),
-    cookieBanner: resolveSignal(inline.cookieBanner, c.cookieBanner, gtmMode),
+    ga4: resolveSignal(inline.ga4, c.ga4, gtmMode, jsRendered),
+    metaPixel: resolveSignal(inline.metaPixel, c.metaPixel, gtmMode, jsRendered),
+    linkedInInsight: resolveSignal(inline.linkedInInsight, c.linkedInInsight, gtmMode, jsRendered),
+    hotjar: resolveSignal(inline.hotjar, c.hotjar, gtmMode, jsRendered),
+    clarity: resolveSignal(inline.clarity, c.clarity, gtmMode, jsRendered),
+    cookieBanner: resolveSignal(inline.cookieBanner, c.cookieBanner, gtmMode, jsRendered),
     socialLinks: Array.from(new Set(socialLinks)).slice(0, 10),
     ctas: Array.from(new Set(ctas)).slice(0, 10),
     hasBlog: $('a[href*="/blog" i], a[href*="/aktualnosci" i]').length > 0,

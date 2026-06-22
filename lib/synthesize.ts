@@ -250,8 +250,10 @@ function findGaps(s: ScrapeSignals, a: AdSignals, form: LeadForm): Finding[] {
       detail: 'Cel świadomościowy bez contentu = drogi zasięg paid bez efektu długoterminowego.',
     });
 
-  // --- Honest "couldn't verify" notes for signals hidden behind an unreadable GTM container. ---
+  // --- Honest "couldn't verify" notes for signals we couldn't read: either hidden
+  // behind an unreadable GTM container, or injected by client-side JS (SPA/SSG). ---
   const unverified: string[] = [];
+  if (s.gtm === 'unknown') unverified.push('GTM');
   if (s.ga4 === 'unknown') unverified.push('GA4');
   if (s.metaPixel === 'unknown') unverified.push('Meta Pixel');
   if (s.linkedInInsight === 'unknown') unverified.push('LinkedIn Insight');
@@ -260,7 +262,7 @@ function findGaps(s: ScrapeSignals, a: AdSignals, form: LeadForm): Finding[] {
       severity: 'info',
       title: `Tracking do potwierdzenia: ${unverified.join(', ')}`,
       detail:
-        'Strona ładuje GTM, ale nie udało nam się odczytać zawartości kontenera, więc tych tagów nie potwierdzamy automatycznie. Zweryfikujemy je ręcznie — nie zakładamy, że ich brakuje.',
+        'Tych tagów nie potwierdziliśmy automatycznie — strona ładuje je przez JavaScript albo kryją się w kontenerze GTM, którego nie odczytaliśmy. Zweryfikujemy je ręcznie na konsultacji i nie zakładamy, że ich brakuje.',
     });
 
   return gaps.slice(0, 5);
