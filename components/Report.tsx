@@ -301,12 +301,19 @@ function BigStat({ label, value, accent }: { label: string; value: number; accen
 }
 
 function SectionAudit({ report }: { report: ReportType }) {
-  const avgScore =
-    Math.round(
-      ((report.radar.tracking + report.radar.paidAcquisition + report.radar.organicPresence + report.radar.conversion + report.radar.retention + report.radar.measurement) /
-        6) *
-        10,
-    ) / 10;
+  // Average only over axes we actually measured — `null` ("nie zweryfikowano") must
+  // NOT count as 0, otherwise an unverified axis would drag the maturity score down.
+  const measured = [
+    report.radar.tracking,
+    report.radar.paidAcquisition,
+    report.radar.organicPresence,
+    report.radar.conversion,
+    report.radar.retention,
+    report.radar.measurement,
+  ].filter((v): v is number => v !== null);
+  const avgScore = measured.length
+    ? Math.round((measured.reduce((a, b) => a + b, 0) / measured.length) * 10) / 10
+    : 0;
   return (
     <SectionWrapper>
       <SectionHeader num="03" title="AUDYT DOJRZAŁOŚCI" subtitle="radar_6_wymiarow" />
@@ -410,12 +417,13 @@ function SectionAudit({ report }: { report: ReportType }) {
   );
 }
 
-function ScoreCell({ label, value }: { label: string; value: number }) {
+function ScoreCell({ label, value }: { label: string; value: number | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true, margin: '-50px' });
   const [n, setN] = useState(0);
+  const safeValue = value ?? 0;
   useEffect(() => {
-    if (!inView) return;
+    if (!inView || value === null) return;
     const start = performance.now();
     let raf = 0;
     const tick = (now: number) => {
@@ -427,7 +435,23 @@ function ScoreCell({ label, value }: { label: string; value: number }) {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [inView, value]);
-  const filled = Math.round(value);
+
+  // Unverified axis: be explicit ("nie zweryfikowano"), never show a misleading 0.0/10.
+  if (value === null) {
+    return (
+      <motion.div ref={ref} variants={fadeUp} className="p-4 rounded-2xl glass-soft">
+        <div className="font-mono text-[10px] uppercase tracking-widest text-novem-dim mb-1"># {label}</div>
+        <div className="display-mono text-2xl tabular-nums leading-tight text-novem-mute">
+          n/d
+        </div>
+        <div className="font-mono text-[9px] uppercase tracking-widest text-novem-dim mt-2">
+          nie zweryfikowano
+        </div>
+      </motion.div>
+    );
+  }
+
+  const filled = Math.round(safeValue);
   const isGood = value >= 7;
   const isWarn = value >= 4 && value < 7;
   return (
