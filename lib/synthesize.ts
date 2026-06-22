@@ -54,10 +54,15 @@ export async function synthesize(args: {
 
   // Optional LLM polish layer
   if (process.env.ANTHROPIC_API_KEY) {
+    // [DIAG] tymczasowe — potwierdza w logach, czy polish wisiał / ile trwał.
+    const t0 = Date.now();
+    console.log(`[synthesize:polish] → start at=${new Date().toISOString()}`);
     try {
       const polished = await polishWithClaude(base);
+      console.log(`[synthesize:polish] ← ok elapsedMs=${Date.now() - t0}`);
       return polished;
-    } catch {
+    } catch (e) {
+      console.warn(`[synthesize:polish] ✗ fallback elapsedMs=${Date.now() - t0} err=${String((e as Error)?.message || e)}`);
       return base;
     }
   }
@@ -365,7 +370,15 @@ function buildRecommendation(
 
 async function polishWithClaude(base: Report): Promise<Report> {
   const Anthropic = (await import('@anthropic-ai/sdk')).default;
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // The SDK default timeout is 10 min with 2 retries — longer than the function's
+  // maxDuration, so a slow/hung call would freeze the whole pipeline and leave the
+  // report stuck on "analyzing". Bound it hard: on timeout we fall back to the
+  // deterministic report (synthesize() catches and returns `base`).
+  const client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: 20_000,
+    maxRetries: 1,
+  });
   const adsState = {
     google: base.ads.google, // 'confirmed' | 'not_detected' | 'unknown'
     meta: base.ads.meta,
@@ -394,11 +407,14 @@ ${JSON.stringify(
     2,
   )}`;
 
-  const msg = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
-    messages: [{ role: 'user', content: prompt }],
-  });
+  const msg = await client.messages.create(
+    {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }],
+    },
+    { timeout: 20_000 },
+  );
   const text = msg.content
     .filter((c) => c.type === 'text')
     .map((c: any) => c.text)
