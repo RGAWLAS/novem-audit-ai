@@ -98,18 +98,12 @@ export interface AdSignals {
   googleAdsMeta?: { formats: Record<string, number>; first?: string; last?: string };
 }
 
-/**
- * Radar axes. `null` = "nie zweryfikowano" — we could not measure this axis (e.g. ads
- * not checked, or site unreachable). It is NEVER a 0: a hard zero would falsely claim
- * the client does nothing on that axis. `null` axes are excluded from the average.
- * `measurement` comes from the questionnaire, so it is always known.
- */
 export interface RadarScores {
-  tracking: number | null;
-  paidAcquisition: number | null;
-  organicPresence: number | null;
-  conversion: number | null;
-  retention: number | null;
+  tracking: number;
+  paidAcquisition: number;
+  organicPresence: number;
+  conversion: number;
+  retention: number;
   measurement: number;
 }
 

@@ -102,24 +102,12 @@ function computeRadar(s: ScrapeSignals, a: AdSignals, m: Measurement | ''): Rada
   const measurement = m ? measurementMap[m] : 3;
 
   const clamp = (n: number) => Math.max(0, Math.min(10, Math.round(n * 10) / 10));
-
-  // Honesty guards: an axis we could not actually measure is `null` ("nie
-  // zweryfikowano"), never a 0. A 0 asserts "they do nothing here" — but `unknown`
-  // means we didn't look, which is a different claim.
-  //  - tracking: every tracking signal is unknown (JS-rendered SPA/SSG or unreachable)
-  //  - paid: Google Ads Transparency could not run (Apify off / failed) → can't assess paid
-  //  - organic/conversion/retention: site unreachable → we never saw the page content
-  const trackingUnverified = [
-    s.gtm, s.ga4, s.metaPixel, s.linkedInInsight, s.hotjar, s.clarity,
-  ].every((x) => x === 'unknown');
-  const paidUnverified = a.google === 'unknown';
-
   return {
-    tracking: trackingUnverified ? null : clamp(tracking),
-    paidAcquisition: paidUnverified ? null : clamp(paidAcquisition),
-    organicPresence: s.reachable ? clamp(organicPresence) : null,
-    conversion: s.reachable ? clamp(conversion) : null,
-    retention: s.reachable ? clamp(retention) : null,
+    tracking: clamp(tracking),
+    paidAcquisition: clamp(paidAcquisition),
+    organicPresence: clamp(organicPresence),
+    conversion: clamp(conversion),
+    retention: clamp(retention),
     measurement: clamp(measurement),
   };
 }
@@ -333,13 +321,6 @@ function buildRecommendation(
   if (goal === 'sales_growth' && off(s.metaPixel)) {
     plan.push('Włączenie Meta Pixel + CAPI: odzyskanie remarketingu (zwykle +15–25% ROAS w 60 dni).');
   }
-
-  // We could not verify current paid activity (Transparency not run). Stay neutral —
-  // never assume the client runs no campaigns or that we start "od zera".
-  const adsUnverified = a.google === 'unknown' && a.meta === 'unknown';
-  if (adsUnverified) {
-    plan.push('Obecnych działań płatnych (Google / Meta Ads) nie zweryfikowaliśmy automatycznie — przejrzymy je wspólnie na konsultacji, zanim ustalimy podział budżetu.');
-  }
   if (goal === 'brand_awareness') {
     plan.push('Definicja brand lift KPI (awareness, recall, consideration) i pomiar co kwartał — bez tego budżet brandowy jest niemierzony.');
   }
@@ -366,13 +347,7 @@ function buildRecommendation(
 async function polishWithClaude(base: Report): Promise<Report> {
   const Anthropic = (await import('@anthropic-ai/sdk')).default;
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const adsState = {
-    google: base.ads.google, // 'confirmed' | 'not_detected' | 'unknown'
-    meta: base.ads.meta,
-  };
   const prompt = `Jesteś senior strategiem performance marketingu w agencji Novem.pl. Otrzymujesz wstępny raport audytu marketingowego dla klienta. Twoje zadanie: doprecyzować pole "business" (industry, icp, stage) i przepisać "rationale" + "headline" rekomendacji w jeszcze bardziej konkretny, bezpośredni sposób — bez ogólników, w stylu Novem (profesjonalny, ROI-driven, pewny). Zwróć WYŁĄCZNIE JSON z polami: { "business": {...}, "recommendation": { "headline": "...", "rationale": "..." } }. Brak komentarzy. Język: polski.
-
-ZASADA UCZCIWOŚCI (krytyczna): sygnały mają trójstan: "confirmed" = potwierdzone, "not_detected" = sprawdzone i nieobecne, "unknown" = NIE ZWERYFIKOWANO. Gdy stan reklam to "unknown" (google=${adsState.google}, meta=${adsState.meta}), NIGDY nie pisz, że klient „nie prowadzi kampanii", „nie reklamuje się" ani że zaczyna „od zera". W takim wypadku pisz neutralnie, np. „obecne działania płatne zweryfikujemy na konsultacji". To samo dotyczy trackingu o stanie "unknown" — nie twierdź, że czegoś „brak". googleAdsCount=0 przy stanie "unknown" NIE oznacza zera kampanii, tylko brak weryfikacji.
 
 DANE WEJŚCIOWE:
 ${JSON.stringify(
