@@ -10,6 +10,8 @@ const LABELS: Record<keyof RadarScores, string> = {
 };
 
 export function RadarChart({ scores }: { scores: RadarScores }) {
+  // `null` = nie zweryfikowano. Leave the vertex empty (recharts renders a gap)
+  // rather than plotting a 0 that would read as "they do nothing on this axis".
   const data = (Object.keys(scores) as (keyof RadarScores)[]).map((k) => ({
     axis: LABELS[k], value: scores[k],
   }));
